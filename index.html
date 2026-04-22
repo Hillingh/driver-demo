@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>車輛替更預約</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    * { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; overscroll-behavior-y: none; background: #f8fafc; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    
+    .vehicle-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+    .vehicle-card:active { transform: scale(0.98); }
+    
+    .bottom-sheet-enter { transform: translateY(100%); }
+    .bottom-sheet-enter-active { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    .bottom-sheet-leave-active { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); transform: translateY(100%); }
+    
+    .list-move, .list-enter-active, .list-leave-active { transition: all 0.25s ease; }
+    .list-enter-from, .list-leave-to { opacity: 0; transform: translateY(10px); }
+    .list-leave-active { position: absolute; }
+    
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+    .empty-icon { animation: float 3s ease-in-out infinite; }
+  </style>
+</head>
+<body>
+  <div id="app" class="max-w-md mx-auto h-screen flex flex-col">
+    
+    <!-- 頂部固定區 -->
+    <header class="bg-white border-b border-slate-100 sticky top-0 z-30 shadow-sm">
+      <!-- 1. 早/夜更切換（高對比雙欄設計） -->
+      <div class="px-4 pt-4 pb-3">
+        <div class="grid grid-cols-2 gap-3">
+          <button @click="selectedShift = 'early'"
+                  :class="['py-3 rounded-2xl text-sm font-bold transition-all flex flex-col items-center justify-center gap-1 border-2',
+                           selectedShift === 'early'
+                             ? 'bg-orange-50 border-orange-400 text-orange-700 shadow-md shadow-orange-100 scale-[1.02]'
+                             : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300']">
+            <div class="flex items-center gap-2">
+              <span class="text-xl">🌅</span>
+              <span>早更</span>
+            </div>
+            <span class="text-[10px] font-normal opacity-70">05:00 - 17:00</span>
+          </button>
+          <button @click="selectedShift = 'night'"
+                  :class="['py-3 rounded-2xl text-sm font-bold transition-all flex flex-col items-center justify-center gap-1 border-2',
+                           selectedShift === 'night'
+                             ? 'bg-indigo-50 border-indigo-400 text-indigo-700 shadow-md shadow-indigo-100 scale-[1.02]'
+                             : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300']">
+            <div class="flex items-center gap-2">
+              <span class="text-xl">🌙</span>
+              <span>夜更</span>
+            </div>
+            <span class="text-[10px] font-normal opacity-70">17:00 - 05:00</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 2. 日期橫滑（全邊框選中樣式） -->
+      <div class="flex gap-3 overflow-x-auto no-scrollbar px-4 pb-3">
+        <div v-for="day in next7Days" :key="day.date"
+             @click="selectedDate = day.date"
+             :class="['flex-shrink-0 w-16 h-20 rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all border-2',
+                      selectedDate === day.date 
+                        ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm' 
+                        : 'border-transparent bg-white text-slate-400 hover:border-slate-200 hover:bg-slate-50']">
+          <div class="text-[10px] font-medium mb-0.5">{{ day.dayName }}</div>
+          <div class="text-xl font-bold leading-none">{{ day.day }}</div>
+          <div class="text-[10px] mt-1 opacity-60">{{ day.month }}/{{ day.day }}</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主內容區 -->
+    <main class="flex-1 overflow-y-auto no-scrollbar px-4 py-3">
+      
+      <!-- 折扣規則對比提示條 -->
+      <div v-if="displayList.length > 0" class="mb-3 px-3 py-2.5 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100 flex items-center justify-between text-xs shadow-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-blue-700 font-bold">📉 折扣遞減中</span>
+          <span class="text-slate-400">|</span>
+          <span class="text-slate-600">最高享 <span class="font-bold text-blue-800">{{ maxDiscount }}折</span></span>
+        </div>
+        <span class="px-2 py-0.5 bg-white rounded-full text-blue-700 font-medium shadow-sm border border-blue-100">
+          提前預約更划算
+        </span>
+      </div>
+
+      <!-- 列表頭部 -->
+      <div class="flex items-center justify-between mb-3 px-0.5">
+        <div>
+          <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+            可預約車輛
+            <span v-if="displayList.length > 0" class="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded-full">
+              {{ availableList.length }}
+            </span>
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">
+            {{ selectedDateInfo.month }}月{{ selectedDateInfo.day }}日 · {{ selectedShift === 'early' ? '早更' : '夜更' }}
+          </p>
+        </div>
+      </div>
+
+      <!-- 空狀態 -->
+      <div v-if="displayList.length === 0" class="flex flex-col items-center justify-center py-16 text-center">
+        <div class="w-24 h-24 bg-slate-100 rounded-full flex items-center justify-center mb-4 empty-icon">
+          <i class="fas fa-calendar-times text-3xl text-slate-400"></i>
+        </div>
+        <h3 class="text-base font-bold text-slate-700 mb-1">暫無可預約車輛</h3>
+        <p class="text-xs text-slate-500 max-w-[220px] leading-relaxed mb-6">該時段名額已滿或系統維護，請切換其他時間查看</p>
+        <div class="flex gap-2">
+          <button @click="tryPreviousDate" class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-xs font-medium active:bg-slate-50">
+            <i class="fas fa-arrow-left mr-1"></i>前一天
+          </button>
+          <button @click="tryNextDate" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium active:bg-blue-700">
+            後一天<i class="fas fa-arrow-right ml-1"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- 緊湊車輛列表 -->
+      <transition-group name="list" tag="div" class="space-y-2" v-else>
+        <div v-for="item in displayList" :key="item.shiftId"
+             @click="handleCardClick(item)"
+             :class="[
+               'vehicle-card rounded-xl p-3.5 flex items-center justify-between border shadow-sm cursor-pointer',
+               item.discountTier === 'high' ? 'bg-emerald-50/30 border-emerald-200' : 
+               item.discountTier === 'mid' ? 'bg-blue-50/20 border-blue-100' : 'bg-white border-slate-100'
+             ]">
+          
+          <!-- 左側信息（已移除餘席提示） -->
+          <div class="flex-1 min-w-0 pr-3">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="font-bold text-slate-800 text-base tracking-wide truncate">{{ item.plate }}</span>
+              <span :class="['px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap',
+                            item.status === 'available' ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600']">
+                {{ item.status === 'available' ? '可預約' : '已預約' }}
+              </span>
+            </div>
+            <div class="flex items-center gap-1.5 text-xs text-slate-500 truncate">
+              <i class="fas fa-car-side text-[10px] text-slate-400"></i>
+              <span class="truncate">{{ item.model }}</span>
+            </div>
+          </div>
+
+          <!-- 右側：折扣直觀對比 + 操作 -->
+          <div class="flex flex-col items-end gap-1.5 flex-shrink-0 min-w-[76px]">
+            <!-- 折扣核心標籤 -->
+            <div :class="['px-2 py-0.5 rounded-lg text-xs font-bold flex items-center gap-1',
+                          item.discountTier === 'high' ? 'bg-emerald-100 text-emerald-700' :
+                          item.discountTier === 'mid' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600']">
+              <span>{{ item.discountLabel }}</span>
+              <span class="opacity-60 text-[10px]">{{ item.daysHint }}</span>
+            </div>
+            
+            <!-- 力度條直觀對比 -->
+            <div class="flex gap-1 mt-0.5">
+              <div v-for="n in 3" :key="n" 
+                   :class="['w-1.5 h-1.5 rounded-full transition-colors', 
+                            n <= item.strength ? (item.discountTier==='high'?'bg-emerald-500':'bg-blue-500') : 'bg-slate-200']"></div>
+            </div>
+
+            <!-- 操作按鈕 -->
+            <div v-if="item.status === 'available'" class="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mt-0.5">
+              <i class="fas fa-chevron-right text-[10px]"></i>
+            </div>
+            <button v-else @click.stop="cancelBooking(item)" 
+                    class="px-2 py-1 bg-slate-100 text-slate-600 text-[10px] font-medium rounded-lg active:bg-slate-200 mt-0.5">
+              取消
+            </button>
+          </div>
+        </div>
+      </transition-group>
+    </main>
+
+    <!-- 預約確認彈層 -->
+    <transition name="bottom-sheet">
+      <div v-if="showConfirmModal" class="fixed inset-0 z-50" @click.self="showConfirmModal = false">
+        <div class="absolute inset-0 bg-black/20 backdrop-blur-sm"></div>
+        <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl p-5 pb-7 shadow-xl">
+          <div class="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-4"></div>
+          <h3 class="text-lg font-bold text-slate-800 mb-1">確認預約</h3>
+          <p class="text-xs text-slate-500 mb-4">提交後將鎖定名額，適用當前折扣</p>
+          
+          <div class="bg-slate-50 rounded-xl p-3.5 space-y-2 mb-5 border border-slate-100 text-sm">
+            <div class="flex justify-between"><span class="text-slate-500">車輛</span><span class="font-semibold text-slate-800">{{ selectedItem?.plate }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">時段</span><span class="font-semibold text-blue-600">{{ selectedShift === 'early' ? '🌅 早更' : '🌙 夜更' }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">日期</span><span class="font-semibold text-slate-800">{{ selectedDateInfo.month }}月{{ selectedDateInfo.day }}日</span></div>
+            <div class="flex justify-between pt-2 border-t border-slate-200">
+              <span class="text-slate-500">適用折扣</span>
+              <span class="font-bold text-emerald-600">{{ selectedItem?.discountLabel }}（{{ selectedItem?.daysHint }}）</span>
+            </div>
+          </div>
+          
+          <div class="flex gap-3">
+            <button @click="showConfirmModal = false" class="flex-1 h-12 bg-slate-100 text-slate-700 rounded-xl font-medium active:bg-slate-200">返回</button>
+            <button @click="confirmBooking" :disabled="loading"
+                    class="flex-1 h-12 bg-blue-600 text-white rounded-xl font-medium active:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2">
+              <i v-if="loading" class="fas fa-circle-notch fa-spin"></i>
+              {{ loading ? '提交中...' : '確認預約' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Toast -->
+    <transition name="bottom-sheet">
+      <div v-if="toast.visible" 
+           :class="['fixed left-4 right-4 bottom-6 z-50 p-3.5 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium',
+                    toast.type === 'success' ? 'bg-slate-800 text-white' : 'bg-red-600 text-white']">
+        <i :class="toast.type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle'"></i>
+        {{ toast.message }}
+      </div>
+    </transition>
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+      setup() {
+        const selectedShift = ref('early');
+        const selectedDate = ref(new Date().toISOString().split('T')[0]);
+        const showConfirmModal = ref(false);
+        const selectedItem = ref(null);
+        const loading = ref(false);
+        const toast = ref({ visible: false, message: '', type: 'success' });
+
+        const baseVehicles = [
+          { id: 1, plate: 'WV4104', model: 'TOYOTA 混能20' },
+          { id: 2, plate: 'WV3193', model: 'TOYOTA 混能20' },
+          { id: 3, plate: 'WV7504', model: 'TOYOTA 混能20' },
+          { id: 4, plate: 'XC1397', model: 'TOYOTA 混能20' },
+          { id: 5, plate: 'XE4983', model: '混能 混能21' },
+          { id: 6, plate: 'XF2422', model: '混能 混能21' },
+          { id: 7, plate: 'XG5216', model: 'TOYOTA 混能21' },
+          { id: 8, plate: 'TH3481', model: 'TOYOTA 15-16年 4座' },
+          { id: 9, plate: 'VF7292', model: 'TOYOTA 17年以上4座' },
+          { id: 10, plate: 'XJ5903', model: 'FORD FORD-21' }
+        ];
+
+        const allShifts = ref([]);
+
+        // 🔹 折扣階梯計算邏輯（天數越近折扣越低）
+        const calculateDiscount = (targetDateStr) => {
+          const today = new Date(); today.setHours(0,0,0,0);
+          const target = new Date(targetDateStr); target.setHours(0,0,0,0);
+          const daysDiff = Math.floor((target - today) / (1000 * 60 * 60 * 24));
+          
+          if (daysDiff >= 5) return { percent: 20, label: '-20%', tier: 'high', strength: 3, hint: `提前${daysDiff}天` };
+          if (daysDiff >= 3) return { percent: 15, label: '-15%', tier: 'high', strength: 3, hint: `提前${daysDiff}天` };
+          if (daysDiff >= 1) return { percent: 10, label: '-10%', tier: 'mid', strength: 2, hint: `提前${daysDiff}天` };
+          return { percent: 5, label: '-5%', tier: 'low', strength: 1, hint: '臨近開班' };
+        };
+
+        const generateShiftData = () => {
+          const today = new Date();
+          const shifts = [];
+          for (let i = 0; i < 7; i++) {
+            const date = new Date(today);
+            date.setDate(today.getDate() + i);
+            const dateStr = date.toISOString().split('T')[0];
+            const disc = calculateDiscount(dateStr);
+            
+            baseVehicles.forEach(v => {
+              const rand = Math.random();
+              const hasAvailable = i !== 2; // 模擬第3天無可約數據
+              const status = hasAvailable && rand > 0.4 ? 'available' : rand > 0.15 ? 'booked' : 'full';
+              
+              shifts.push({
+                id: `${v.id}-${dateStr}-early`,
+                vehicleId: v.id, date: dateStr, type: 'early', status,
+                bookedByMe: status === 'booked' && v.id % 5 === 0,
+                bookerName: status === 'booked' && v.id % 5 !== 0 ? '陳師傅' : null,
+                capacity: status === 'available' ? 1 : 0, maxCapacity: 2,
+                ...disc
+              });
+              shifts.push({
+                id: `${v.id}-${dateStr}-night`,
+                vehicleId: v.id, date: dateStr, type: 'night', 
+                status: hasAvailable && rand > 0.6 ? 'available' : 'locked',
+                bookedByMe: false, bookerName: null,
+                capacity: hasAvailable && rand > 0.6 ? 1 : 0, maxCapacity: 2,
+                ...disc
+              });
+            });
+          }
+          return shifts;
+        };
+
+        allShifts.value = generateShiftData();
+
+        const next7Days = computed(() => {
+          const days = [];
+          const today = new Date();
+          const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+          for (let i = 0; i < 7; i++) {
+            const date = new Date(today);
+            date.setDate(today.getDate() + i);
+            days.push({
+              date: date.toISOString().split('T')[0],
+              dayName: dayNames[date.getDay()],
+              month: date.getMonth() + 1,
+              day: date.getDate()
+            });
+          }
+          return days;
+        });
+
+        const selectedDateInfo = computed(() => next7Days.value.find(d => d.date === selectedDate.value) || { month: '', day: '' });
+
+        const displayList = computed(() => {
+          const targetShifts = allShifts.value.filter(s => s.date === selectedDate.value && s.type === selectedShift.value);
+          return targetShifts
+            .filter(s => s.status === 'available' || s.bookedByMe)
+            .map(shift => {
+              const v = baseVehicles.find(v => v.id === shift.vehicleId);
+              return {
+                shiftId: shift.id, plate: v.plate, model: v.model,
+                status: shift.bookedByMe ? 'booked_me' : 'available',
+                bookedByMe: shift.bookedByMe,
+                capacity: shift.capacity, maxCapacity: shift.maxCapacity,
+                discountLabel: shift.label,
+                discountTier: shift.tier,
+                strength: shift.strength,
+                daysHint: shift.hint
+              };
+            });
+        });
+
+        const availableList = computed(() => displayList.value.filter(i => i.status === 'available'));
+
+        // 🔹 頂部對比數據
+        const maxDiscount = computed(() => {
+          const discounts = displayList.value.map(i => i.discountLabel.replace('%','').replace('-',''));
+          return discounts.length ? Math.max(...discounts) : 0;
+        });
+
+        const tryPreviousDate = () => {
+          const idx = next7Days.value.findIndex(d => d.date === selectedDate.value);
+          if (idx > 0) selectedDate.value = next7Days.value[idx - 1].date;
+        };
+        const tryNextDate = () => {
+          const idx = next7Days.value.findIndex(d => d.date === selectedDate.value);
+          if (idx < next7Days.value.length - 1) selectedDate.value = next7Days.value[idx + 1].date;
+        };
+
+        const handleCardClick = (item) => {
+          if (item.status === 'available') { selectedItem.value = item; showConfirmModal.value = true; }
+        };
+
+        const confirmBooking = async () => {
+          loading.value = true;
+          await new Promise(r => setTimeout(r, 600));
+          const shift = allShifts.value.find(s => s.id === selectedItem.value.shiftId);
+          if (shift) { shift.status = 'booked'; shift.bookedByMe = true; shift.bookerName = '我'; shift.capacity = 0; }
+          loading.value = false; showConfirmModal.value = false;
+          showToast(`✅ 預約成功！適用 ${selectedItem.value.discountLabel}`);
+        };
+
+        const cancelBooking = (item) => {
+          if (!confirm('確定取消？名額將立即釋放')) return;
+          const shift = allShifts.value.find(s => s.id === item.shiftId);
+          if (shift) { shift.status = 'available'; shift.bookedByMe = false; shift.bookerName = null; shift.capacity = 1; }
+          showToast('已取消預約');
+        };
+
+        const showToast = (msg, type = 'success') => {
+          toast.value = { visible: true, message: msg, type };
+          setTimeout(() => toast.value.visible = false, 2500);
+        };
+
+        return {
+          selectedShift, selectedDate, showConfirmModal, selectedItem, loading, toast,
+          next7Days, selectedDateInfo, displayList, availableList, maxDiscount,
+          tryPreviousDate, tryNextDate, handleCardClick, confirmBooking, cancelBooking
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
